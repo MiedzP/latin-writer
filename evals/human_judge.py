@@ -26,13 +26,19 @@ SWAPS = [("orum", "ae"), ("ibus", "os"), ("um", "us"), ("us", "um"), ("am", "as"
          ("is", "em"), ("em", "is"), ("ae", "am"), ("it", "ant"), ("unt", "it")]
 
 
-def plant_error(text: str, rng: random.Random) -> tuple[str, str] | None:
+# Finite-verb ending swaps (person/number/tense changes). Used by the verb-focused batch.
+VERB_SWAPS = [("it", "et"), ("et", "it"), ("at", "it"), ("it", "at"), ("unt", "it"), ("it", "unt"),
+              ("ant", "at"), ("at", "ant"), ("nt", "t"), ("t", "nt")]
+VERB_SUFFIX = ("it", "et", "at", "unt", "ant", "t", "nt")
+
+
+def plant_error(text: str, rng: random.Random, swaps=SWAPS) -> tuple[str, str] | None:
     """Return (corrupted_text, changed_word) or None if no word can be changed."""
     words = text.split()
     candidates = []
     for i, w in enumerate(words):
         core = re.sub(r"[^A-Za-z]+$", "", w)
-        for old, new in SWAPS:
+        for old, new in swaps:
             if len(core) >= 4 and core.lower().endswith(old):
                 candidates.append((i, core, old, new))
     if not candidates:
@@ -44,17 +50,44 @@ def plant_error(text: str, rng: random.Random) -> tuple[str, str] | None:
     return " ".join(words), core + " -> " + new_core
 
 
-def make(n: int, batch: str, seed: int = 0) -> None:
+def make(n: int, batch: str, seed: int = 0, focus: str | None = None,
+         author: str | None = None, kind: str | None = None) -> None:
+    """Build a blinded batch.
+
+    focus=None:      mixed short clips (legacy batch b1).
+    focus='verb':    complete sentences, planted errors only in verb endings.
+    focus='grammar': complete sentences, planted errors in noun/adjective endings and verb endings.
+    author / kind:   restrict the held-out pool (e.g. author='Caesar', kind='prose').
+    """
     rng = random.Random(seed)
-    pool = [r for r in held_out("verse") + held_out("prose") if 6 <= len(r["text"].split()) <= 16]
+    kinds = [kind] if kind else ["verse", "prose"]
+    base = [r for k in kinds for r in held_out(k)]
+    if author:
+        base = [r for r in base if r["author"] == author]
+    if focus in ("verb", "grammar"):
+        pool = [r for r in base
+                if 6 <= len(r["text"].split()) <= 20 and r["text"].rstrip()[-1:] in ".;!?"]
+    else:
+        pool = [r for r in base if 6 <= len(r["text"].split()) <= 16]
     rng.shuffle(pool)
     items, key = [], {}
     for r in pool:
         if len(items) >= n:
             break
         planted = rng.random() < 0.5
+        category = None
         if planted:
-            res = plant_error(r["text"], rng)
+            if focus == "verb":
+                swaps, category = VERB_SWAPS, "verb"
+            elif focus == "grammar":
+                # mix: about half nominal endings, half verb endings
+                if rng.random() < 0.5:
+                    swaps, category = VERB_SWAPS, "verb"
+                else:
+                    swaps, category = SWAPS, "nominal"
+            else:
+                swaps = SWAPS
+            res = plant_error(r["text"], rng, swaps)
             if res is None:
                 continue
             text, change = res
@@ -63,7 +96,8 @@ def make(n: int, batch: str, seed: int = 0) -> None:
             text, change, label = r["text"], None, "clean"
         item_id = f"{batch}-{len(items):03d}"
         items.append({"id": item_id, "text": text})
-        key[item_id] = {"label": label, "change": change, "author": r["author"], "kind": r["kind"]}
+        key[item_id] = {"label": label, "change": change, "category": category,
+                        "author": r["author"], "kind": r["kind"]}
     rng.shuffle(items)
     RESULTS.mkdir(parents=True, exist_ok=True)
     (RESULTS / f"batch_{batch}.json").write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -101,25 +135,33 @@ def score(batch: str) -> dict:
     judged = [json.loads(l) for l in (RESULTS / f"judgments_{batch}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
     tp = fp = tn = fn = 0
     misses, false_alarms = [], []
+    by_cat: dict[str, dict[str, int]] = {}
     for j in judged:
         truth = key[j["id"]]
         is_error = truth["label"] == "error"
+        cat = truth.get("category") or ("clean" if not is_error else "unlabelled")
+        bucket = by_cat.setdefault(cat, {"caught": 0, "missed": 0, "clean_ok": 0, "clean_flagged": 0})
         if is_error and j["says_error"]:
             tp += 1
+            bucket["caught"] += 1
         elif is_error:
             fn += 1
-            misses.append({"id": j["id"], "change": truth["change"], "note": j["note"]})
+            bucket["missed"] += 1
+            misses.append({"id": j["id"], "change": truth["change"], "category": cat, "note": j["note"]})
         elif j["says_error"]:
             fp += 1
-            false_alarms.append({"id": j["id"], "note": j["note"]})
+            bucket["clean_flagged"] += 1
+            false_alarms.append({"id": j["id"], "author": truth["author"], "note": j["note"]})
         else:
             tn += 1
+            bucket["clean_ok"] += 1
     total = tp + fp + tn + fn
     report = {
         "batch": batch, "judged": total,
         "planted_caught": tp, "planted_missed": fn,
         "clean_flagged": fp, "clean_passed": tn,
         "accuracy": round((tp + tn) / total, 3) if total else None,
+        "by_category": by_cat,
         "missed_planted": misses, "false_alarms": false_alarms,
     }
     (RESULTS / f"human_score_{batch}.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -133,13 +175,16 @@ if __name__ == "__main__":
     m = sub.add_parser("make")
     m.add_argument("--n", type=int, default=30)
     m.add_argument("--batch", required=True)
+    m.add_argument("--focus", choices=["verb", "grammar"], default=None)
+    m.add_argument("--author", default=None, help="e.g. Caesar, Cicero, Vergil, Ovid")
+    m.add_argument("--kind", choices=["verse", "prose"], default=None)
     j = sub.add_parser("judge")
     j.add_argument("--batch", required=True)
     s = sub.add_parser("score")
     s.add_argument("--batch", required=True)
     a = ap.parse_args()
     if a.cmd == "make":
-        make(a.n, a.batch)
+        make(a.n, a.batch, focus=a.focus, author=a.author, kind=a.kind)
     elif a.cmd == "judge":
         judge(a.batch)
     else:
