@@ -15,7 +15,8 @@ from typing import Callable
 
 from .llm import ask, extract_json, parse_output
 from .meter import scan, scan_couplet
-from .prompts import FORMS, GENERATOR_FEEDBACK, GENERATOR_SYSTEM, JUDGE_SYSTEM, STYLES
+from .judge import judge_latin
+from .prompts import FORMS, GENERATOR_FEEDBACK, GENERATOR_SYSTEM, STYLES
 from .config import JUDGE_MODEL
 
 Log = Callable[[str], None]
@@ -52,12 +53,8 @@ def _metre_results(lines: list[str], form: str):
 
 
 def _judge(latin: str, form: str, style: str, theme: str) -> dict:
-    user = (
-        f"Form: {form}. Style: {style}. Requested theme: {theme}.\n\n"
-        f"Latin text:\n{latin}"
-    )
-    reply = ask([{"role": "user", "content": user}], JUDGE_SYSTEM, model=JUDGE_MODEL, max_tokens=2000)
-    return extract_json(reply)
+    """Two-pass judge: the grammar book is consulted only when the first pass is unsure."""
+    return judge_latin(latin, form, style, theme, model=JUDGE_MODEL)
 
 
 def _meter_feedback(results) -> str:
