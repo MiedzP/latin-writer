@@ -32,14 +32,14 @@ VERB_SWAPS = [("it", "et"), ("et", "it"), ("at", "it"), ("it", "at"), ("unt", "i
 VERB_SUFFIX = ("it", "et", "at", "unt", "ant", "t", "nt")
 
 
-def plant_error(text: str, rng: random.Random, swaps=SWAPS) -> tuple[str, str] | None:
+def plant_error(text: str, rng: random.Random, swaps=SWAPS, min_len: int = 4) -> tuple[str, str] | None:
     """Return (corrupted_text, changed_word) or None if no word can be changed."""
     words = text.split()
     candidates = []
     for i, w in enumerate(words):
         core = re.sub(r"[^A-Za-z]+$", "", w)
         for old, new in swaps:
-            if len(core) >= 4 and core.lower().endswith(old):
+            if len(core) >= min_len and core.lower().endswith(old):
                 candidates.append((i, core, old, new))
     if not candidates:
         return None
