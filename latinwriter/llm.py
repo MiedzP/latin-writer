@@ -30,13 +30,16 @@ def client():
     return _client
 
 
-def ask(messages: list[dict], system: str, model: str = GEN_MODEL, max_tokens: int = 4000) -> str:
+def ask(messages: list[dict], system: str, model: str = GEN_MODEL, max_tokens: int = 4000,
+        json_mode: bool = False) -> str:
     if PROVIDER == "groq":
+        extra = {"response_format": {"type": "json_object"}} if json_mode else {}
         resp = client().chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": system}] + messages,
             max_tokens=max_tokens,
             temperature=0.7,
+            **extra,
         )
         return resp.choices[0].message.content or ""
     resp = client().messages.create(model=model, system=system, messages=messages, max_tokens=max_tokens)

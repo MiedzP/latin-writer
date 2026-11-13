@@ -39,7 +39,7 @@ class AgentLoopTests(unittest.TestCase):
     def test_judge_errors_reach_the_generator(self):
         seen = []
 
-        def fake_ask(messages, system, model=None, max_tokens=None):
+        def fake_ask(messages, system, model=None, max_tokens=None, json_mode=False):
             seen.append(messages[-1]["content"])
             return GOOD_VERSE
 

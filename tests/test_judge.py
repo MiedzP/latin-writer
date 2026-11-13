@@ -25,7 +25,7 @@ class TwoPassJudgeTests(unittest.TestCase):
     def test_confident_first_pass_never_escalates(self):
         calls = []
 
-        def fake_ask(messages, system, model=None, max_tokens=None):
+        def fake_ask(messages, system, model=None, max_tokens=None, json_mode=False):
             calls.append(system)
             return reply(90, "high")
 
@@ -39,7 +39,7 @@ class TwoPassJudgeTests(unittest.TestCase):
     def test_low_confidence_escalates_with_reference(self):
         calls = []
 
-        def fake_ask(messages, system, model=None, max_tokens=None):
+        def fake_ask(messages, system, model=None, max_tokens=None, json_mode=False):
             calls.append(system)
             return reply(60, "low") if len(calls) == 1 else reply(85, "high")
 

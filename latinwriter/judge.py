@@ -48,6 +48,14 @@ def _grammar_index():
         return None
 
 
+def _log_bad_reply(reply: str, err: Exception) -> None:
+    """Keep malformed judge replies so the failure mode can be inspected later."""
+    log = ROOT / "data" / "judge_bad_replies.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a", encoding="utf-8") as f:
+        f.write(f"--- {err}\n{reply}\n\n")
+
+
 def _ask_judge(latin: str, form: str, style: str, theme: str, reference: list[dict] | None,
                model: str) -> dict:
     user = f"Form: {form}. Style: {style}. Requested theme: {theme}.\n\nLatin text:\n{latin}"
@@ -57,11 +65,18 @@ def _ask_judge(latin: str, form: str, style: str, theme: str, reference: list[di
         system += REFERENCE_NOTE.format(pages=pages)
     last_error = None
     for _ in range(2):  # one retry: models sometimes return malformed JSON
-        reply = ask([{"role": "user", "content": user}], system, model=model, max_tokens=2000)
+        try:
+            reply = ask([{"role": "user", "content": user}], system, model=model, max_tokens=2000, json_mode=True)
+        except Exception as err:  # Groq rejects malformed JSON server-side with a 400 "Failed to generate JSON"
+            if "Failed to generate JSON" not in str(err):
+                raise
+            last_error = "server rejected the reply as malformed JSON"
+            continue
         try:
             return extract_json(reply)
         except (ValueError, json.JSONDecodeError) as err:
             last_error = err
+            _log_bad_reply(reply, err)
     return {"score": 0, "errors": [{"line": 0, "problem": f"judge reply was not valid JSON ({last_error})",
                                     "fix": ""}],
             "strengths": [], "confidence": "low", "reference_query": ""}
