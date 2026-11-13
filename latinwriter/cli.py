@@ -35,6 +35,7 @@ def main(argv: list[str] | None = None) -> None:
     wr.add_argument("--out", type=Path, required=True)
     wr.add_argument("--iters", type=int, default=4)
     wr.add_argument("--threshold", type=int, default=80)
+    wr.add_argument("--no-exemplars", action="store_true", help="do not show the author's sample lines")
 
     args = ap.parse_args(argv)
     if args.cmd == "check":
@@ -46,6 +47,7 @@ def main(argv: list[str] | None = None) -> None:
         report = write(
             form=args.form, style=args.style, theme=args.theme, out=args.out,
             lines=args.lines, max_iters=args.iters, threshold=args.threshold,
+            exemplars=not args.no_exemplars,
         )
         print(f"result: {report['result']}  (piece: {args.out / 'piece.txt'})")
 

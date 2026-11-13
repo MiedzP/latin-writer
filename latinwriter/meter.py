@@ -13,6 +13,7 @@ know real vowel quantities, so a pass means "plausible", not "scans correctly".
 """
 import itertools
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 VOWELS = "aeiouy"
@@ -43,10 +44,13 @@ class Scansion:
     pattern: str = ""           # matched pattern, shown as - u x
     reason: str = ""
     syllable_text: list[str] = field(default_factory=list)
+    violations: int | None = None
 
 
 def _normalise(line: str) -> list[str]:
-    text = line.lower().replace("y", "i")          # j and v stay as consonants
+    # Drop macrons and breves (combining marks) so ā scans like a; quantity info is not used here.
+    text = "".join(c for c in unicodedata.normalize("NFD", line) if unicodedata.category(c) != "Mn")
+    text = text.lower().replace("æ", "ae").replace("œ", "oe").replace("y", "i")  # j and v stay consonants
     text = re.sub(r"[^a-z\s]", " ", text)
     return text.split()
 
@@ -102,7 +106,8 @@ def weigh(line: str) -> tuple[list[str], list[str]]:
     for k, (start, end, diph) in enumerate(nuclei):
         nxt_start = nuclei[k + 1][0] if k + 1 < len(nuclei) else len(s)
         coda = s[end:nxt_start]
-        count = sum(2 if c in "xz" else 1 for c in coda)
+        # h is an aspirate and does not make position; x and z count as two consonants.
+        count = sum(2 if c in "xz" else 1 for c in coda if c != "h")
         if diph:
             w = "H"
         elif count >= 3:
@@ -117,16 +122,17 @@ def weigh(line: str) -> tuple[list[str], list[str]]:
     return weights, texts
 
 
-def _fits(weights: str, pattern: str) -> bool:
+def _violations(weights: str, pattern: str) -> int:
+    """Heavy syllables that fall in a short slot. -1 if the lengths differ."""
     if len(weights) != len(pattern):
-        return False
-    for w, p in zip(weights, pattern):
-        if p == "S" and w == "H":
-            return False
-    return True
+        return -1
+    return sum(1 for w, p in zip(weights, pattern) if p == "S" and w == "H")
 
 
-def scan(line: str, form: str = "hexameter") -> Scansion:
+DEFAULT_MAX_VIOLATIONS = 1   # chosen by evals/metre_eval.py: recall 0.956, false positives 4.2%
+
+
+def scan(line: str, form: str = "hexameter", max_violations: int = DEFAULT_MAX_VIOLATIONS) -> Scansion:
     weights, texts = weigh(line)
     n = len(weights)
     res = Scansion(line=line.strip(), form=form, ok=False, syllables=n,
@@ -150,12 +156,18 @@ def scan(line: str, form: str = "hexameter") -> Scansion:
     else:
         raise ValueError(f"unknown form: {form}")
 
+    best = None
     for pat in candidates:
-        if len(pat) == n and _fits("".join(weights), pat):
-            res.ok = True
-            res.pattern = "".join(SHOW[c] for c in pat)
-            res.reason = "fits a metrical pattern"
-            return res
+        v = _violations("".join(weights), pat)
+        if v >= 0 and (best is None or v < best[0]):
+            best = (v, pat)
+    if best is not None and best[0] <= max_violations:
+        v, pat = best
+        res.ok = True
+        res.violations = v
+        res.pattern = "".join(SHOW[c] for c in pat)
+        res.reason = "fits a metrical pattern" + (f" with {v} heavy-in-short violation(s)" if v else "")
+        return res
 
     heavy_in_short = [i for i, w in enumerate(weights) if w == "H"]
     res.reason = (

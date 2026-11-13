@@ -9,6 +9,7 @@ The best attempt is kept. Metre failures are penalised in the score, so a gramma
 unmetrical attempt does not beat a metrical one.
 """
 import json
+import random
 from pathlib import Path
 from typing import Callable
 
@@ -19,6 +20,27 @@ from .config import JUDGE_MODEL
 
 Log = Callable[[str], None]
 METER_PENALTY = 10
+
+# Writer styles that correspond to a corpus author (exemplars come from that author's training split).
+STYLE_AUTHOR = {"vergil": "Vergil", "ovid": "Ovid", "cicero": "Cicero", "caesar": "Caesar"}
+
+
+def exemplar_block(author: str, form: str, n: int = 8, seed: int = 0) -> str:
+    """Sample lines of the author's TRAINING split, for the generator's system prompt.
+
+    The held-out test sections are never used here, so the generation eval stays clean.
+    """
+    from .corpus import load
+    kind = "prose" if form == "prose" else "verse"
+    try:
+        pool = [r["text"] for r in load(split="train", kind=kind) if r["author"] == author]
+    except FileNotFoundError:
+        return ""
+    if not pool:
+        return ""
+    picks = random.Random(seed).sample(pool, min(n, len(pool)))
+    header = f"\n\nExamples of {author}'s own Latin, for style and vocabulary only; do not copy them:\n"
+    return header + "\n".join(f"- {p}" for p in picks)
 
 
 def _metre_results(lines: list[str], form: str):
@@ -55,6 +77,7 @@ def write(
     lines: int = 6,
     max_iters: int = 4,
     threshold: int = 80,
+    exemplars: bool = True,
     log: Log = print,
 ) -> dict:
     if form not in FORMS:
@@ -65,6 +88,8 @@ def write(
     out.mkdir(parents=True, exist_ok=True)
 
     system = GENERATOR_SYSTEM.format(form=form, form_rule=FORMS[form], style_rule=STYLES[style])
+    if exemplars and style in STYLE_AUTHOR:
+        system += exemplar_block(STYLE_AUTHOR[style], form)
     request = f"Theme: {theme}. Length: about {lines} {'lines' if form != 'prose' else 'sentences'}."
     messages = [{"role": "user", "content": request}]
 
@@ -117,7 +142,7 @@ def write(
 
     passed = bool(best) and best["meter_failures"] == 0 and int(best["judge"].get("score", 0)) >= threshold
     report = {
-        "form": form, "style": style, "theme": theme,
+        "form": form, "style": style, "theme": theme, "exemplars": exemplars,
         "result": "ok" if passed else "below_threshold",
         "best_iteration": best["iteration"] if best else None,
         "attempts": attempts,
