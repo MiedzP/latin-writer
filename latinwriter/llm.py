@@ -6,6 +6,7 @@ OpenAI-compatible endpoint, using the GROQ_API_KEY environment variable.
 import json
 import os
 import re
+import time
 
 from .config import GEN_MODEL, GROQ_BASE_URL, PROVIDER
 
@@ -34,14 +35,22 @@ def ask(messages: list[dict], system: str, model: str = GEN_MODEL, max_tokens: i
         json_mode: bool = False) -> str:
     if PROVIDER == "groq":
         extra = {"response_format": {"type": "json_object"}} if json_mode else {}
-        resp = client().chat.completions.create(
-            model=model,
-            messages=[{"role": "system", "content": system}] + messages,
-            max_tokens=max_tokens,
-            temperature=0.7,
-            **extra,
-        )
-        return resp.choices[0].message.content or ""
+        for attempt in range(6):  # free tiers have tokens-per-minute limits; wait and retry
+            try:
+                resp = client().chat.completions.create(
+                    model=model,
+                    messages=[{"role": "system", "content": system}] + messages,
+                    max_tokens=max_tokens,
+                    temperature=0.7,
+                    **extra,
+                )
+                return resp.choices[0].message.content or ""
+            except Exception as err:
+                if "429" not in str(err) or attempt == 5:
+                    raise
+                match = re.search(r"try again in ([\d.]+)s", str(err))
+                time.sleep(float(match.group(1)) + 0.5 if match else 5.0)
+        return ""
     resp = client().messages.create(model=model, system=system, messages=messages, max_tokens=max_tokens)
     return "".join(b.text for b in resp.content if b.type == "text")
 

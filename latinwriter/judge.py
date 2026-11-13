@@ -56,10 +56,29 @@ def _log_bad_reply(reply: str, err: Exception) -> None:
         f.write(f"--- {err}\n{reply}\n\n")
 
 
+EXAMPLES_PATH = ROOT / "data" / "judge_examples.json"
+
+
+def _calibration_block() -> str:
+    """Human-labelled examples (data/judge_examples.json), shown to the judge on every call if present."""
+    if not EXAMPLES_PATH.exists():
+        return ""
+    examples = json.loads(EXAMPLES_PATH.read_text(encoding="utf-8"))
+    lines = ["", "Calibration examples from a human judge, showing what this judge should count as an error "
+                 "(the examples are not the text you judge):"]
+    for ex in examples:
+        verdict = "ERROR" if ex["is_error"] else "GRAMMATICAL"
+        note = f" Reason: {ex['note']}" if ex.get("note") else ""
+        lines.append(f'- "{ex["text"]}" -> {verdict}.{note}')
+    return "\n".join(lines)
+
+
 def _ask_judge(latin: str, form: str, style: str, theme: str, reference: list[dict] | None,
-               model: str) -> dict:
+               model: str, use_examples: bool = True) -> dict:
     user = f"Form: {form}. Style: {style}. Requested theme: {theme}.\n\nLatin text:\n{latin}"
     system = JUDGE_SYSTEM
+    if use_examples:
+        system += _calibration_block()
     if reference:
         pages = "\n\n".join(f"[page {r['page']}, {r['part']}]\n{r['text'][:3000]}" for r in reference)
         system += REFERENCE_NOTE.format(pages=pages)
@@ -83,9 +102,9 @@ def _ask_judge(latin: str, form: str, style: str, theme: str, reference: list[di
 
 
 def judge_latin(latin: str, form: str, style: str, theme: str, model: str = JUDGE_MODEL,
-                index=None) -> dict:
+                index=None, use_examples: bool = True) -> dict:
     """Judge a Latin text. Escalates to the grammar book only when pass 1 reports low confidence."""
-    first = _ask_judge(latin, form, style, theme, None, model)
+    first = _ask_judge(latin, form, style, theme, None, model, use_examples)
     if first.get("confidence", "high") != "low":
         return dict(first, escalated=False)
     if index is None:
@@ -96,6 +115,6 @@ def judge_latin(latin: str, form: str, style: str, theme: str, model: str = JUDG
     refs = index.retrieve(query, k=3)
     if not refs:
         return dict(first, escalated=False, note="low confidence, and no relevant pages were found")
-    second = _ask_judge(latin, form, style, theme, refs, model)
+    second = _ask_judge(latin, form, style, theme, refs, model, use_examples)
     return dict(second, escalated=True, first_pass_score=first.get("score"),
                 reference_pages=[r["page"] for r in refs])
