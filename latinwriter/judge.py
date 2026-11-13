@@ -55,8 +55,16 @@ def _ask_judge(latin: str, form: str, style: str, theme: str, reference: list[di
     if reference:
         pages = "\n\n".join(f"[page {r['page']}, {r['part']}]\n{r['text'][:3000]}" for r in reference)
         system += REFERENCE_NOTE.format(pages=pages)
-    reply = ask([{"role": "user", "content": user}], system, model=model, max_tokens=2000)
-    return extract_json(reply)
+    last_error = None
+    for _ in range(2):  # one retry: models sometimes return malformed JSON
+        reply = ask([{"role": "user", "content": user}], system, model=model, max_tokens=2000)
+        try:
+            return extract_json(reply)
+        except (ValueError, json.JSONDecodeError) as err:
+            last_error = err
+    return {"score": 0, "errors": [{"line": 0, "problem": f"judge reply was not valid JSON ({last_error})",
+                                    "fix": ""}],
+            "strengths": [], "confidence": "low", "reference_query": ""}
 
 
 def judge_latin(latin: str, form: str, style: str, theme: str, model: str = JUDGE_MODEL,

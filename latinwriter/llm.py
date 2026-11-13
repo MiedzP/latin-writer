@@ -1,26 +1,44 @@
-"""Anthropic Messages API wrapper (text only) and reply parsing."""
+"""Text-only model client (Anthropic or Groq) and reply parsing.
+
+Provider is chosen by LATINWRITER_PROVIDER (see config.py). Groq is reached through its
+OpenAI-compatible endpoint, using the GROQ_API_KEY environment variable.
+"""
 import json
 import os
 import re
 
-import anthropic
+from .config import GEN_MODEL, GROQ_BASE_URL, PROVIDER
 
-from .config import GEN_MODEL
-
-_client: anthropic.Anthropic | None = None
+_client = None
 
 
-def client() -> anthropic.Anthropic:
+def client():
     global _client
     if _client is None:
-        key = os.environ.get("ANTHROPIC_API_KEY")
-        if not key:
-            raise RuntimeError("Set ANTHROPIC_API_KEY to use the writing agent (the `check` command needs no key).")
-        _client = anthropic.Anthropic(api_key=key)
+        if PROVIDER == "groq":
+            import openai
+            key = os.environ.get("GROQ_API_KEY")
+            if not key:
+                raise RuntimeError("Set GROQ_API_KEY (or use LATINWRITER_PROVIDER=anthropic).")
+            _client = openai.OpenAI(api_key=key, base_url=GROQ_BASE_URL)
+        else:
+            import anthropic
+            key = os.environ.get("ANTHROPIC_API_KEY")
+            if not key:
+                raise RuntimeError("Set ANTHROPIC_API_KEY (the `check` command needs no key).")
+            _client = anthropic.Anthropic(api_key=key)
     return _client
 
 
 def ask(messages: list[dict], system: str, model: str = GEN_MODEL, max_tokens: int = 4000) -> str:
+    if PROVIDER == "groq":
+        resp = client().chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": system}] + messages,
+            max_tokens=max_tokens,
+            temperature=0.7,
+        )
+        return resp.choices[0].message.content or ""
     resp = client().messages.create(model=model, system=system, messages=messages, max_tokens=max_tokens)
     return "".join(b.text for b in resp.content if b.type == "text")
 
