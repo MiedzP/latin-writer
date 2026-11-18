@@ -102,12 +102,30 @@ def run(k: int = 6, seed: int = 0, limit: int | None = None) -> dict:
     if limit:
         test = test[:limit]
 
+    # Checkpoint: one JSON line per judged item, written as soon as both variants are done.
+    # A rerun (after a rate limit, memory stop or crash) reads it and skips finished items.
+    checkpoint = RESULTS / f"judge_calibration_k{k}.partial.jsonl"
+    done: dict[str, dict] = {}
+    if checkpoint.exists():
+        for line in checkpoint.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                row = json.loads(line)
+                done[row["id"]] = row
+        print(f"resuming: {len(done)} items already judged in {checkpoint}")
+
     variants = {"zero_shot": [], "few_shot": []}
-    for it in test:
-        for name, exs in (("zero_shot", []), ("few_shot", examples)):
-            flagged, _ = _judge_flags(it["text"], it["form"], exs)
-            variants[name].append(dict(it, flagged=flagged))
-        print(f"{it['batch']} {it['id']}: truth={'error' if it['is_error'] else 'clean'}")
+    with checkpoint.open("a", encoding="utf-8") as ck:
+        for it in test:
+            row = done.get(it["id"])
+            if row is None:
+                row = {"id": it["id"], "batch": it["batch"], "is_error": it["is_error"], "form": it["form"]}
+                for name, exs in (("zero_shot", []), ("few_shot", examples)):
+                    row[name], _ = _judge_flags(it["text"], it["form"], exs)
+                ck.write(json.dumps(row, ensure_ascii=False) + "\n")
+                ck.flush()
+                print(f"{it['batch']} {it['id']}: truth={'error' if it['is_error'] else 'clean'}", flush=True)
+            for name in variants:
+                variants[name].append(dict(it, flagged=row[name]))
 
     report = {
         "eval": "judge_calibration",
